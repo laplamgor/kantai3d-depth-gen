@@ -53,29 +53,28 @@ def load_yolo_model(weights_path):
         raise ValueError(f"Failed to load model from {weights_path}: {e}")
 
 
-def brightest_neighbor_filter(image):
-    # Get image dimensions
-    height, width = image.shape[:2]
+def brightest_neighbor_filter(image, kernel_size=7):
+    """
+    Applies a max filter (brightest neighbor filter) using OpenCV's dilate.
     
-    # Create output image with same shape and type
-    output = np.zeros_like(image)
+    Args:
+        image: Input image (grayscale or color).
+        kernel_size: Size of the neighborhood (should be odd).
     
-    # Pad the image to handle borders (using replicate padding)
-    padded = cv2.copyMakeBorder(image, 3, 3, 3, 3, cv2.BORDER_REPLICATE)
-    
-    # Process each pixel
-    for i in range(height):
-        for j in range(width):
-            # Extract 3x3 neighborhood from padded image
-            neighborhood = padded[i:i+7, j:j+7]
-            
-            # Find maximum value for each channel
-            max_values = np.max(neighborhood, axis=(0, 1))
-            
-            # Assign the maximum values to the output pixel
-            output[i, j] = max_values
-    
-    return output
+    Returns:
+        Filtered image with maximum values in each neighborhood.
+    """
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+
+    if image.ndim == 2:  # Grayscale
+        return cv2.dilate(image, kernel)
+    elif image.ndim == 3:  # Color image
+        # Apply dilation to each channel independently
+        channels = cv2.split(image)
+        dilated_channels = [cv2.dilate(c, kernel) for c in channels]
+        return cv2.merge(dilated_channels)
+    else:
+        raise ValueError("Unsupported image format")
 
 def fast_box_blur_integral(image, kernel_size=41):
     """Apply a fast box blur to a single-channel image using an integral image."""
@@ -194,7 +193,7 @@ breast_seg_model = load_yolo_model(BREAST_SEG_WEIGHTS)
 breast_size_model = load_yolo_model(BREAST_SIZE_WEIGHTS)
 
 # Get list of image files in input folder
-image_extensions = ('.png', '.jpg', '.jpeg', '.bmp')
+image_extensions = ('.png')
 input_files = [f for f in os.listdir(input_folder) if f.lower().endswith(image_extensions)]
 
 for image_file in input_files:
@@ -206,9 +205,6 @@ for image_file in input_files:
         print(f"Skipping {image_file}: Output files already exist")
         continue
 
-
-
-
     # Preprocess image
     img = preprocess_image(input_path, IMG_SIZE)
     
@@ -219,12 +215,6 @@ for image_file in input_files:
         breast_mask = perform_segmentation(breast_seg_model, img, CONF_THRESHOLD, IMG_SIZE)
         breast_mask = fast_box_blur_integral(breast_mask, 41)
     
-    # Save the mask
-    cv2.imwrite(output_path+"sss.png", breast_mask)
-    print(f"Segmentation mask saved to {output_path}")
-
-
-
 
     print(f"Processing {image_file}...")
 
@@ -289,22 +279,28 @@ for image_file in input_files:
 
 
         print(f"Assign pixel values based on alpha channel...")
-        output_image = np.zeros((height, width, 3), dtype=np.uint8)
-        # Assign pixel values based on alpha channel
-        for i in range(height):
-            for j in range(width):
-                if alpha_channel[i, j] < 255:
-                    depth_value = blur[i, j]
-                else:
-                    depth_value = depth_normalized[i, j]
-                r = min(255, 140 + int((depth_value - face_average_depth) / 5.0 + 20.0 * i / height))
-                if breast_size != -1:
-                    b = int(breast_mask[i, j] / 255.0 * (10 + breast_size * 25))
-                    if b < 7:
-                        b = 0
-                else:
-                    b = 0
-                output_image[i, j] = [b, 0, r]
+
+        # Select depth_value: use `blur` where alpha < 255, otherwise use `depth_normalized`
+        depth_value = np.where(alpha_channel < 255, blur, depth_normalized)
+
+        # Compute the red channel
+        i_coords = np.arange(height).reshape(-1, 1)  # column vector for row index
+        r_channel = 140 + ((depth_value - face_average_depth) / 5.0) + (20.0 * i_coords / height)
+        r_channel = np.clip(r_channel, 0, 255).astype(np.uint8)
+
+        # Compute the blue channel if breast size is detected
+        if breast_size != -1:
+            b_channel = (breast_mask / 255.0) * (10 + breast_size * 25)
+            b_channel[b_channel < 7] = 0
+            b_channel = b_channel.astype(np.uint8)
+        else:
+            b_channel = np.zeros((height, width), dtype=np.uint8)
+
+        # Green channel is always zero
+        g_channel = np.zeros((height, width), dtype=np.uint8)
+
+        # Merge channels into final image
+        output_image = np.stack([b_channel, g_channel, r_channel], axis=-1)
 
 
         print(f"Save the processed image...")
