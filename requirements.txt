@@ -1,0 +1,23 @@
+# Kantai3D dependencies.
+#
+# IMPORTANT: torch/torchvision must stay on the CUDA build that matches your
+# driver. Do NOT let pip "upgrade" them. Install torch first from the official
+# CUDA index, e.g. for CUDA 12.8:
+#   pip install torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/cu128
+# then install the rest from this file.
+
+# --- capture stage ---
+# Drives your system-installed Microsoft Edge (channel="msedge").
+playwright
+
+# --- download stage ---
+requests>=2.32
+
+# --- depth stage ---
+# depth-pro is Apple's package; torch comes from your pinned index above.
+# See https://github.com/apple/ml-depth-pro for installation.
+depth-pro
+ultralytics
+opencv-python
+numpy
+Pillow
