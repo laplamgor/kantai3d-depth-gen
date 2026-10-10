@@ -1,2 +1,27 @@
+# --- secrets / credentials ---
+credentials.json
+secrets.json
+
+# --- machine-specific settings (config.example.json is the template) ---
+config.json
+
+# --- browser state (contains DMM session cookies) ---
+.browser-profile/
+
+# --- captured game data ---
+start2.json
+
+# --- downloaded CGs / outputs / model weights (data, not code) ---
+input/
+output/
+checkpoints/
 *.pt
 *.png
+
+# --- python ---
+__pycache__/
+*.pyc
+_t*.py
+
+# --- editor / IDE ---
+.idea/

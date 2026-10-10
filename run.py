@@ -9,10 +9,10 @@ import cv2
 
 # Configuration
 
-# input_folder = "Z:/kccacheproxy/src/proxy/input"
-input_folder = "input"
-# output_folder = "Z:/kccacheproxy/src/proxy/output"
-output_folder = "output"
+input_folder = "Z:/kccacheproxy/src/proxy/input"
+# input_folder = "input"
+output_folder = "Z:/midas"
+# output_folder = "output"
 
 FACE_SEG_WEIGHTS = "checkpoints/FaceSeg.pt"  # Replace with actual path to the model weights
 BREAST_SEG_WEIGHTS = "checkpoints/BreastSeg.pt"  # Replace with actual path to the model weights
