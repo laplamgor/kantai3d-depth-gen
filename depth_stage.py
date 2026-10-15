@@ -7,6 +7,7 @@ Weight paths default to ./checkpoints; pass ``checkpoint_dir`` to override.
 """
 
 import os
+import time
 
 import cv2
 import numpy as np
@@ -19,6 +20,18 @@ CHECKPOINT_DIR = "checkpoints"
 _FACE = "FaceSeg.pt"
 _BREAST_SEG = "BreastSeg.pt"
 _BREAST_SIZE = "BreastSize.pt"
+
+
+def _sync(device):
+    """Block until pending GPU work finishes, so timings are accurate.
+
+    MPS/CUDA inference is asynchronous; without this a timed stage can report
+    near-zero because it only queued the work.
+    """
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 
 def _get_average_intensity(image, mask):
@@ -145,22 +158,35 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
             continue
 
         try:
+            total_t0 = time.perf_counter()
+
             img = cv2.imread(input_path)
             if img is None:
                 raise ValueError("could not read image")
 
+            _sync(device)
+            t0 = time.perf_counter()
             face_mask = _perform_segmentation(face_model, img)
+            _sync(device)
+            t_face = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
             breast_size = _detect_breast_size(breast_size_model, img)
             breast_mask = None
             if breast_size != -1:
                 breast_mask = _fast_box_blur_integral(
                     _perform_segmentation(breast_seg_model, img), 41
                 )
+            _sync(device)
+            t_breast = time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             image, _, f_px = depth_pro.load_rgb(input_path)
             image = transform(image)
             prediction = depth_model.infer(image, f_px=f_px)
             depth = prediction["depth"].cpu().numpy()
+            _sync(device)
+            t_depth = time.perf_counter() - t0
 
             inv = 1 / depth
             lo, hi = np.min(inv), np.max(inv)
@@ -195,7 +221,10 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
             g_channel = np.zeros((height, width), dtype=np.uint8)
             output_image = np.stack([b_channel, g_channel, r_channel], axis=-1)
             cv2.imwrite(output_path, output_image)
-            print(f"Saved {output_path}")
+            total = time.perf_counter() - total_t0
+            print(f"Saved {output_path} (depth={t_depth * 1000:.0f}ms, "
+                  f"face={t_face * 1000:.0f}ms, breast={t_breast * 1000:.0f}ms, "
+                  f"total={total * 1000:.0f}ms)")
         except Exception as exc:  # noqa: BLE001
             print(f"Error processing {image_file}: {exc}")
             continue

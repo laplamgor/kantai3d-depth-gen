@@ -128,10 +128,10 @@ def build_download_list(start2, output_dir, skip_existing_input=True):
     """
     out = []
     for local, remote in assetpaths.ship_cg_entries(start2):
-        if os.path.exists(os.path.join(output_dir, local)):
-            continue  # resume: depth map already generated
         if skip_existing_input and os.path.exists(os.path.join(INPUT_DIR, local)):
             continue  # resume: already downloaded, depth gen pending
+        if os.path.exists(os.path.join(output_dir, local)):
+            continue  # resume: depth map already generated
         out.append((local, remote))
     return out
 
