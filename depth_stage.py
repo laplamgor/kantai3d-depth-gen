@@ -93,12 +93,19 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
     import depth_pro
 
     ckpt = os.path.abspath(checkpoint_dir or CHECKPOINT_DIR)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"CUDA Available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        print(f"GPU Device: {torch.cuda.get_device_name(0)}")
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
     else:
+        device = torch.device("cpu")
+    print(f"Device: {device}")
+    if device.type == "cuda":
+        print(f"GPU Device: {torch.cuda.get_device_name(0)}")
+    elif device.type == "cpu":
         print("Running on CPU")
+    # MPS has no fp16 kernels for some DepthPro ops, so keep it fp32 there.
+    precision = torch.float16 if device.type == "cuda" else torch.float32
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -115,7 +122,7 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
     config = DepthProConfig(**vars(DEFAULT_MONODEPTH_CONFIG_DICT))
     config.checkpoint_uri = depth_ckpt
     depth_model, transform = depth_pro.create_model_and_transforms(
-        config=config, device=device, precision=torch.float16
+        config=config, device=device, precision=precision
     )
     depth_model.eval()
     print(f"Model is running on: {next(depth_model.parameters()).device}")

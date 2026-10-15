@@ -19,32 +19,53 @@ capture.py ──► start2.json ──► assetpaths.py ──► pipeline.py
 
 ## Requirements
 
-* **Python 3.10+** (developed on 3.12).
-* **Microsoft Edge** (used by Playwright for the capture step).
-* A **CUDA-capable GPU** for the depth stage. CPU works but is very slow.
-  Developed and tested on an RTX 4070 Ti.
+* **Python 3.10+**, on **3.12** (developed there). A brand-new Python usually has
+  no prebuilt torch wheels yet — pick the newest version torch actually supports.
+* A GPU for the depth stage: **NVIDIA/CUDA** (Windows/Linux) or **Apple
+  Silicon/MPS** (macOS). CPU works but is very slow. Developed on an RTX 4070 Ti.
+* **Google Chrome** (or another Chromium-based / Playwright-managed browser) for the capture step.
 * ~2 GB of free disk for the model weights (downloaded automatically on first
   depth run — see [Model weights](#model-weights)).
 * A DMM account to play KanColle. A dummy account without any 2FA is recommended.
 
 ## Install
 
-```powershell
-# 1. torch first, from the CUDA index that matches your driver.
-#    Example for CUDA 12.8 / RTX 40-series:
+Only torch needs a manual choice; everything else is one command. Apple's
+`depth_pro` is **not published to PyPI** — `requirements.txt` installs it from
+GitHub source, so there is no separate step for it (on Windows too).
+
+**1. Create a venv (Python 3.12):**
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate                 # Windows (PowerShell): .venv\Scripts\Activate.ps1
+```
+
+**2. Install torch from the index that matches your GPU:**
+
+```bash
+# NVIDIA (Windows/Linux) — match your driver, e.g. CUDA 12.8 / RTX 40-series:
 pip install torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/cu128
 
-# 2. the rest
+# Apple Silicon (macOS) — the default wheel includes the Metal/MPS backend:
+pip install torch torchvision
+```
+
+**3. Install the rest (this pulls `depth_pro` from GitHub):**
+
+```bash
 pip install -r requirements.txt
 ```
 
-> **Do not** install torch from `requirements.txt` blindly — it may replace a
-> working CUDA build. Keep torch pinned to the index above.
+> **Do not** install torch from `requirements.txt` blindly — on an NVIDIA box it
+> may replace a working CUDA build. Keep torch pinned to the index above. (On
+> macOS the default wheel is already correct, so step 2 is enough.)
 
-`capture.py` drives your **system-installed Microsoft Edge** (Playwright's
-`channel="msedge"`), so there is no separate browser download step. If Edge is
-not installed, either install it or switch the `channel` in `capture.py` to a
-browser Playwright manages (`chromium`, `firefox`, `webkit`) and run
+`capture.py` drives your **system-installed Google Chrome** (Playwright's
+`channel="chrome"`), so there is no separate browser download step. Any
+Chromium-based browser works: to use Microsoft Edge instead, change the
+`channel` in `capture.py` to `"msedge"`. To use a browser Playwright manages
+instead, set `channel` to `"chromium"`, `"firefox"`, or `"webkit"` and run
 `python -m playwright install chromium`.
 
 ## Configuration
@@ -57,7 +78,7 @@ copy config.example.json config.json
 
 ```json
 {
-  "output_dir": "Z:\\midas"
+  "output_dir": "./your_output_folder"
 }
 ```
 
@@ -103,7 +124,7 @@ If neither is present, the browser stays open and you log in by hand.
 
 | file | purpose |
 |------|---------|
-| `capture.py`     | Opens Edge, autofills the DMM login, bypasses the region gate, and saves `start2.json` by passively watching for the `api_start2/getData` response. |
+| `capture.py`     | Opens Chrome, autofills the DMM login, bypasses the region gate, and saves `start2.json` by passively watching for the `api_start2/getData` response. |
 | `assetpaths.py`  | Derives ship CG server paths and local file names (full + full_dmg) from `start2.json`. |
 | `pipeline.py`    | Entry point: reads `start2.json`, downloads only missing sprites, runs the depth stage, fetches weights on demand. |
 | `depth_stage.py` | The DepthPro + YOLO (face/breast) + OpenCV pipeline. Importable, no side effects. |

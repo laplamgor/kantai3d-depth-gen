@@ -1,22 +1,24 @@
 # Kantai3D dependencies.
 #
-# IMPORTANT: torch/torchvision must stay on the CUDA build that matches your
-# driver. Do NOT let pip "upgrade" them. Install torch first from the official
-# CUDA index, e.g. for CUDA 12.8:
+# IMPORTANT: install torch/torchvision yourself first and do NOT let pip pick
+# them via this file. On NVIDIA match your driver, e.g. for CUDA 12.8:
 #   pip install torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/cu128
+# On Apple Silicon the default wheel already includes the Metal/MPS backend:
+#   pip install torch torchvision
 # then install the rest from this file.
 
 # --- capture stage ---
-# Drives your system-installed Microsoft Edge (channel="msedge").
+# Drives your system-installed Google Chrome (channel="chrome").
 playwright
 
 # --- download stage ---
 requests>=2.32
 
 # --- depth stage ---
-# depth-pro is Apple's package; torch comes from your pinned index above.
-# See https://github.com/apple/ml-depth-pro for installation.
-depth-pro
+# Apple's Depth Pro is not published to PyPI, so install it from GitHub source.
+# (torch comes from the index you used above; this line also pulls timm,
+# numpy<2, pillow_heif and matplotlib.) See https://github.com/apple/ml-depth-pro.
+depth_pro @ git+https://github.com/apple/ml-depth-pro.git
 ultralytics
 opencv-python
 numpy

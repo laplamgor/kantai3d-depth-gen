@@ -1,4 +1,4 @@
-"""Capture start2.json from the live KanColle game using Playwright + Edge.
+"""Capture start2.json from the live KanColle game using Playwright + Chrome.
 
 Why this approach:
   * Logging in to DMM (possible captcha/2FA) is done by a real browser you can
@@ -10,7 +10,7 @@ Why this approach:
     nothing that breaks when DMM changes its token handling.
 
 Flow:
-  1. Launch Edge with a persistent profile (so you usually stay logged in).
+  1. Launch Chrome with a persistent profile (so you usually stay logged in).
   2. Open the DMM play page.
   3. **Region-block workaround**: from a non-JP IP the play page redirects to
      special.dmm.com/not-available-in-your-region. The trick (same as the
@@ -188,7 +188,7 @@ def _try_click_game_start(page):
 
 def capture(out_path=DEFAULT_OUT, keep_open=False, headless=False, timeout_s=600,
             use_cookie_fix=True):
-    """Open Edge, let the user reach the game, capture api_start2/getData."""
+    """Open Chrome, let the user reach the game, capture api_start2/getData."""
     user, pw = _load_credentials()
     if user and pw:
         print("credentials loaded (will autofill if a login form appears)")
@@ -201,17 +201,16 @@ def capture(out_path=DEFAULT_OUT, keep_open=False, headless=False, timeout_s=600
         try:
             ctx = p.chromium.launch_persistent_context(
                 PROFILE_DIR,
-                channel="msedge",
+                channel="chrome",
                 headless=headless,
                 viewport={"width": 1280, "height": 800},
             )
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             if "existing browser session" in msg or "already in use" in msg:
-                print("\n! The browser profile is already open in another Edge "
-                      "window.")
-                print("  Close that window (or run: "
-                      "Stop-Process -Name msedge -Force) and try again.")
+                print("\n! The browser profile is already open in another "
+                      "Chrome window.")
+                print("  Close that window and try again.")
                 return False
             raise
         page = ctx.pages[0] if ctx.pages else ctx.new_page()

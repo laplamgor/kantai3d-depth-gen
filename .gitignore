@@ -22,6 +22,15 @@ checkpoints/
 __pycache__/
 *.pyc
 _t*.py
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # --- editor / IDE ---
 .idea/
+
+# --- macOS ---
+.DS_Store
