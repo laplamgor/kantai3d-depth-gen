@@ -53,20 +53,23 @@ def _fast_box_blur_integral(image, kernel_size=41):
     image = image.astype(np.uint8) if image.dtype != np.uint8 else image
     height, width = image.shape
     integral = cv2.integral(image)
-    blurred = np.zeros_like(image, dtype=np.float32)
     half_k = kernel_size // 2
-    for i in range(height):
-        for j in range(width):
-            y1, y2 = max(0, i - half_k), min(height, i + half_k + 1)
-            x1, x2 = max(0, j - half_k), min(width, j + half_k + 1)
-            area_sum = (
-                integral[min(y2 + 1, height), min(x2 + 1, width)]
-                - integral[min(y2 + 1, height), x1]
-                - integral[y1, min(x2 + 1, width)]
-                + integral[y1, x1]
-            )
-            area = (y2 - y1) * (x2 - x1)
-            blurred[i, j] = area_sum / area if area > 0 else image[i, j]
+    ys = np.arange(height, dtype=np.int64)[:, None]
+    xs = np.arange(width, dtype=np.int64)[None, :]
+    y1 = np.maximum(ys - half_k, 0)
+    y2 = np.minimum(ys + half_k + 1, height)
+    x1 = np.maximum(xs - half_k, 0)
+    x2 = np.minimum(xs + half_k + 1, width)
+    yu = np.minimum(y2 + 1, height)
+    xu = np.minimum(x2 + 1, width)
+    area_sum = (
+        integral[yu, xu]
+        - integral[yu, x1]
+        - integral[y1, xu]
+        + integral[y1, x1]
+    )
+    area = (y2 - y1) * (x2 - x1)
+    blurred = (area_sum / area).astype(np.float32)
     return np.clip(blurred, 0, 255).astype(np.uint8)
 
 
@@ -117,8 +120,9 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
         print(f"GPU Device: {torch.cuda.get_device_name(0)}")
     elif device.type == "cpu":
         print("Running on CPU")
-    # MPS has no fp16 kernels for some DepthPro ops, so keep it fp32 there.
-    precision = torch.float16 if device.type == "cuda" else torch.float32
+    # fp16 on the GPU backends (CUDA and Metal both have fast fp16); CPU stays
+    # fp32 for accuracy and because fp16 CPU math is slow.
+    precision = torch.float32 if device.type == "cpu" else torch.float16
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -160,9 +164,19 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
         try:
             total_t0 = time.perf_counter()
 
-            img = cv2.imread(input_path)
-            if img is None:
+            t0 = time.perf_counter()
+            original = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
+            t_read = time.perf_counter() - t0
+            if original is None:
                 raise ValueError("could not read image")
+            # Decode once and derive the 3-channel BGR that IMREAD_COLOR would
+            # have returned, instead of reading the same PNG a second time.
+            if original.ndim == 3 and original.shape[2] == 4:
+                img = original[:, :, :3]
+            elif original.ndim == 3:
+                img = original
+            else:
+                img = cv2.cvtColor(original, cv2.COLOR_GRAY2BGR)
 
             _sync(device)
             t0 = time.perf_counter()
@@ -188,6 +202,7 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
             _sync(device)
             t_depth = time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             inv = 1 / depth
             lo, hi = np.min(inv), np.max(inv)
             if hi > lo:
@@ -195,7 +210,6 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
             else:
                 depth_norm = np.zeros_like(depth, dtype=np.uint8)
 
-            original = cv2.imread(input_path, cv2.IMREAD_UNCHANGED)
             if original.shape[2] == 4:
                 alpha = original[:, :, 3]
             else:
@@ -220,11 +234,17 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
 
             g_channel = np.zeros((height, width), dtype=np.uint8)
             output_image = np.stack([b_channel, g_channel, r_channel], axis=-1)
+            t_post = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
             cv2.imwrite(output_path, output_image)
+            t_write = time.perf_counter() - t0
+
             total = time.perf_counter() - total_t0
             print(f"Saved {output_path} (depth={t_depth * 1000:.0f}ms, "
                   f"face={t_face * 1000:.0f}ms, breast={t_breast * 1000:.0f}ms, "
-                  f"total={total * 1000:.0f}ms)")
+                  f"read={t_read * 1000:.0f}ms, post={t_post * 1000:.0f}ms, "
+                  f"write={t_write * 1000:.0f}ms, total={total * 1000:.0f}ms)")
         except Exception as exc:  # noqa: BLE001
             print(f"Error processing {image_file}: {exc}")
             continue

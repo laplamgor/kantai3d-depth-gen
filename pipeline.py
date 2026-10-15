@@ -118,6 +118,18 @@ def load_start2(path):
     return data
 
 
+def _existing_names(directory):
+    """Set of file names in ``directory`` (empty if it doesn't exist).
+
+    A single directory listing instead of one stat per candidate file: the
+    output dir is often a network share where per-file stats are very slow.
+    """
+    try:
+        return set(os.listdir(directory))
+    except OSError:
+        return set()
+
+
 def build_download_list(start2, output_dir, skip_existing_input=True):
     """Return [(local_name, remote_path)] for CGs not yet in output_dir.
 
@@ -126,12 +138,14 @@ def build_download_list(start2, output_dir, skip_existing_input=True):
     but may still be waiting on depth generation, so there is no need to fetch
     them again.
     """
+    have = _existing_names(output_dir)
+    have_input = _existing_names(INPUT_DIR) if skip_existing_input else set()
     out = []
     for local, remote in assetpaths.ship_cg_entries(start2):
-        if skip_existing_input and os.path.exists(os.path.join(INPUT_DIR, local)):
-            continue  # resume: already downloaded, depth gen pending
-        if os.path.exists(os.path.join(output_dir, local)):
+        if local in have:
             continue  # resume: depth map already generated
+        if local in have_input:
+            continue  # resume: already downloaded, depth gen pending
         out.append((local, remote))
     return out
 
@@ -236,11 +250,13 @@ def main():
 
     # Everything that still lacks a depth map but is already on disk in input/
     # (freshly downloaded now, or left over from an interrupted earlier run).
+    have = _existing_names(output_dir)
+    have_input = _existing_names(INPUT_DIR)
     pending = []
     for local, _remote in assetpaths.ship_cg_entries(start2):
-        if os.path.exists(os.path.join(output_dir, local)):
+        if local in have:
             continue
-        if os.path.exists(os.path.join(INPUT_DIR, local)):
+        if local in have_input:
             pending.append(local)
 
     # Bail out *before* touching the model weights (or importing torch), so a
