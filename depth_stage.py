@@ -97,13 +97,18 @@ def _detect_breast_size(model, img):
     return max(detections, key=lambda x: x["confidence"])["class"]
 
 
-def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
+def run(input_dir, output_dir, checkpoint_dir=None, only_files=None,
+        post_process=False):
     """Generate depth maps for every *.png in input_dir into output_dir.
 
     ``checkpoint_dir``: folder holding depth_pro.pt + the YOLO .pt weights.
     ``only_files``: optional iterable of file names to process (relative to
     input_dir). When given, the folder listing is skipped -- pipeline.py
     passes the exact new files it just downloaded.
+    ``post_process``: apply the legacy editor depth styling (face-relative
+    offset, y tilt ramp, transparent-area fill).  Disabled by default while the
+    layered pipeline is validated: layer extraction and inpainting must see the
+    raw normalised inverse depth, not the restyled map.
     """
     from ultralytics import YOLO
     import depth_pro
@@ -144,9 +149,12 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
     depth_model.eval()
     print(f"Model is running on: {next(depth_model.parameters()).device}")
 
-    face_model = YOLO(os.path.join(ckpt, _FACE))
-    breast_seg_model = YOLO(os.path.join(ckpt, _BREAST_SEG))
-    breast_size_model = YOLO(os.path.join(ckpt, _BREAST_SIZE))
+    if post_process:
+        face_model = YOLO(os.path.join(ckpt, _FACE))
+        breast_seg_model = YOLO(os.path.join(ckpt, _BREAST_SEG))
+        breast_size_model = YOLO(os.path.join(ckpt, _BREAST_SIZE))
+    else:
+        face_model = breast_seg_model = breast_size_model = None
 
     if only_files is not None:
         files = [f for f in only_files if f.lower().endswith(".png")]
@@ -180,17 +188,24 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
 
             _sync(device)
             t0 = time.perf_counter()
-            face_mask = _perform_segmentation(face_model, img)
+            if post_process:
+                face_mask = _perform_segmentation(face_model, img)
+            else:
+                face_mask = None
             _sync(device)
             t_face = time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            breast_size = _detect_breast_size(breast_size_model, img)
-            breast_mask = None
-            if breast_size != -1:
-                breast_mask = _fast_box_blur_integral(
-                    _perform_segmentation(breast_seg_model, img), 41
-                )
+            if post_process:
+                breast_size = _detect_breast_size(breast_size_model, img)
+                breast_mask = None
+                if breast_size != -1:
+                    breast_mask = _fast_box_blur_integral(
+                        _perform_segmentation(breast_seg_model, img), 41
+                    )
+            else:
+                breast_size = -1
+                breast_mask = None
             _sync(device)
             t_breast = time.perf_counter() - t0
 
@@ -215,21 +230,28 @@ def run(input_dir, output_dir, checkpoint_dir=None, only_files=None):
             else:
                 alpha = np.full_like(depth_norm, 255, dtype=np.uint8)
 
-            blur = _brightest_neighbor_filter(depth_norm)
             height, width = depth_norm.shape
 
-            face_avg = _get_average_intensity(depth_norm, face_mask) or 128
+            if post_process:
+                blur = _brightest_neighbor_filter(depth_norm)
+                face_avg = _get_average_intensity(depth_norm, face_mask) or 128
 
-            depth_value = np.where(alpha < 255, blur, depth_norm)
-            i_coords = np.arange(height).reshape(-1, 1)
-            r_channel = 140 + ((depth_value - face_avg) / 5.0) + (20.0 * i_coords / height)
-            r_channel = np.clip(r_channel, 0, 255).astype(np.uint8)
+                depth_value = np.where(alpha < 255, blur, depth_norm)
+                i_coords = np.arange(height).reshape(-1, 1)
+                r_channel = 140 + ((depth_value - face_avg) / 5.0) + (20.0 * i_coords / height)
+                r_channel = np.clip(r_channel, 0, 255).astype(np.uint8)
 
-            if breast_size != -1:
-                b_channel = (breast_mask / 255.0) * (10 + breast_size * 25)
-                b_channel[b_channel < 7] = 0
-                b_channel = b_channel.astype(np.uint8)
+                if breast_size != -1:
+                    b_channel = (breast_mask / 255.0) * (10 + breast_size * 25)
+                    b_channel[b_channel < 7] = 0
+                    b_channel = b_channel.astype(np.uint8)
+                else:
+                    b_channel = np.zeros((height, width), dtype=np.uint8)
             else:
+                # Raw normalised inverse depth.  Separation and inpainting run
+                # on this; the edge bleed and any depth styling are applied at
+                # the end of layerize(), after the layers exist.
+                r_channel = depth_norm
                 b_channel = np.zeros((height, width), dtype=np.uint8)
 
             g_channel = np.zeros((height, width), dtype=np.uint8)

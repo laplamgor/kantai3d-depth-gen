@@ -13,8 +13,11 @@ new sprites, and runs a depth-estimation + segmentation pipeline over them.
 ```
 capture.py ──► start2.json ──► assetpaths.py ──► pipeline.py
                                                     ├─ download new CGs (HTTPS)
-                                                    └─ depth_stage.py
-                                                         └─► <output_dir>/*.png
+                                                    ├─ depth_stage.py
+                                                    │    └─► <output_dir>/*.png
+                                                    └─ layerize.py
+                                                         └─► <output_dir>/*_lNN_*_color.png
+                                                             <output_dir>/*_lNN_*_depth.png
 ```
 
 ## Requirements
@@ -78,12 +81,58 @@ copy config.example.json config.json
 
 ```json
 {
-  "output_dir": "./your_output_folder"
+  "output_dir": "./your_output_folder",
+
+  "post_process_depth": false,
+
+  "layerize": {
+    "edge_thresh": 14.0,
+    "cliff_min": 0.12,
+    "max_area_frac": 0.25,
+    "inpaint_method": "lama",
+    "inpaint_margin": 3,
+    "bleed_margin": 0,
+    "render_depth_scale": 0.2,
+    "edge_median": 3,
+    "edge_order": 2
+  }
 }
 ```
 
 If `config.json` is missing or unreadable, `output_dir` falls back to `./output`.
 `config.json` is git-ignored.
+
+`post_process_depth` keeps the legacy editor depth styling (face-relative
+offset, /5 depth compression, y ramp). It is **off** by default: layer
+separation and inpainting run on the raw normalised inverse depth, and the
+styling is meant to be applied last, after the layers exist.
+
+`render_depth_scale` compresses the stored render depth around the 128 level
+(default 0.2, i.e. roughly the old 1/5 compression). The editor's POM and
+jiggle are driven by the red channel; a raw 0–255 range turns the 8-bit depth
+steps into visible bands and stretches the layer edge at steep tilts. Use 1.0
+for raw depth, or a smaller value for a gentler effect. Separately, an object
+layer's depth outside its mask is filled with the scene (background) depth
+rather than 0, so there is no artificial far surface for the POM to run into.
+
+`edge_median` runs a small order-statistic filter (default 3×3) only in the
+band around each layer's alpha edge. Depth Pro turns the black line art into a
+narrow depth slope, and that slope is what still fringes under extreme tilt;
+the filter flattens it while leaving the interior and the far background
+untouched. Set it to 0 to disable, 5 for a stronger flattening.
+
+`edge_order` picks which value in that window is used, ranked from the **top**
+(highest depth first): 2 (default) = 2nd highest; 1 = the highest depth;
+3 = 3rd highest, and so on (values above the window size clamp to the
+maximum). 0 = the median — the 5th of 9 for a 3×3 window. Using the 2nd
+highest biases the edge band toward the nearer side instead of the middle and
+measurably reduces the silhouette fringe at steep tilts; going all the way to
+the 1st flattens it further but amplifies depth-map noise, so 2 is the
+recommended default.
+
+`bleed_margin` optionally extends a layer's depth into its transparent fringe
+(default 0). It is a fallback; the scene-depth fill plus depth compression are
+normally enough. The alpha map is never modified.
 
 ## Usage
 
@@ -92,7 +141,7 @@ If `config.json` is missing or unreadable, `output_dir` falls back to `./output`
 #    Your credentials are autofilled; the region gate is bypassed automatically.
 python capture.py
 
-# 2. Download new sprites and generate their depth maps.
+# 2. Download new sprites, generate depth maps, and layerize them.
 python pipeline.py
 ```
 
@@ -100,6 +149,7 @@ Both stages **skip work that already exists**, so an interrupted run resumes
 cleanly:
 
 * `pipeline.py` skips any ship whose depth map is already in `output_dir`.
+* Any depth map without matching layer PNGs is layerized on the next run.
 * It also skips downloading a sprite that is already in `input/` (e.g. left
   over from a run that was interrupted before the depth stage).
 
@@ -126,11 +176,52 @@ If neither is present, the browser stays open and you log in by hand.
 |------|---------|
 | `capture.py`     | Opens Chrome, autofills the DMM login, bypasses the region gate, and saves `start2.json` by passively watching for the `api_start2/getData` response. |
 | `assetpaths.py`  | Derives ship CG server paths and local file names (full + full_dmg) from `start2.json`. |
-| `pipeline.py`    | Entry point: reads `start2.json`, downloads only missing sprites, runs the depth stage, fetches weights on demand. |
+| `pipeline.py`    | Entry point: reads `start2.json`, downloads only missing sprites, runs the depth stage, layerizes depth maps into PNG pairs, fetches weights on demand. |
 | `depth_stage.py` | The DepthPro + YOLO (face/breast) + OpenCV pipeline. Importable, no side effects. |
+| `layerize.py`    | Depth-cliff layer extraction, background inpainting and per-layer PNG writer. Importable, also has a CLI. |
 | `config.example.json`      | Template for machine-specific settings. |
 | `credentials.example.json` | Template for DMM credentials. |
 | `requirements.txt`         | Python dependencies (torch pinned separately). |
+
+## Layered PNG pairs
+
+`layerize.py` consumes the raw depth PNG and the original sprite and writes one
+colour/depth PNG pair per layer:
+
+```
+<output_dir>/<name>_l00_background_color.png
+<output_dir>/<name>_l00_background_depth.png
+<output_dir>/<name>_l01_obj0_foreground_color.png
+<output_dir>/<name>_l01_obj0_foreground_depth.png
+...
+```
+
+The colour file is RGBA. The depth file is an RGB PNG carrying depth in the red
+channel (`G = B = 0`), the same convention as the editor's normal depth map.
+
+1. **Cliff detection** — Sobel gradient of the depth map, thresholded, and
+   restricted to long connected edge chains.
+2. **Near region** — for each cliff the near side is the connected depth region
+   adjacent to the edge; that mask becomes a foreground object. The region is
+   selected on the full sprite alpha with no dilation, so pixels are included
+   only if their depth actually passes the cliff threshold. Anything behind the
+   near surface (a sleeve, a hand at lower depth) is left in the background.
+3. **Filtering** — body-sized regions and low-contrast cliffs are dropped, and
+   near-duplicate masks are merged.
+4. **Background inpainting** — object pixels that sit over opaque artwork are
+   removed and reconstructed (LaMa by default, OpenCV Telea as fallback). Pixels
+   that only sat in front of the transparent void stay transparent, so nothing
+   is hallucinated behind a floating turret.
+5. **Output** — the inpainted background, then each object, as PNG pairs. Layer
+   order is encoded in the `lNN` prefix (background first).
+
+Separation and inpainting always run on the raw depth, before the editor
+styling. The legacy YOLO face/breast refinements are only applied when
+`post_process_depth` is enabled, and are intended to run after the layers exist.
+
+Layer extraction is heuristic and depends on Depth Pro separating the object
+from the body. Flat depth regions (for example a ship hull that Depth Pro merges
+with the character) yield no layers.
 
 ## Model weights
 
@@ -146,7 +237,9 @@ depth stage runs. Sources and licences:
 
 Depth Pro supplies the depth estimation. The YOLO models steer two
 per-pixel refinements in the output: a face-relative offset for the red
-(depth) channel, and a breast mask/size for the blue channel.
+(depth) channel, and a breast mask/size for the blue channel. They are skipped
+entirely when `post_process_depth` is false, which makes the depth stage much
+faster.
 
 Cite the upstream work if you build on this:
 
@@ -189,12 +282,18 @@ breaks when their token handling changes.
 
 ### Depth
 
-The output is a BGR PNG per sprite:
+The output is a BGR PNG per sprite. With the default
+`"post_process_depth": false` it is the raw normalised inverse depth:
 
-* **R** — normalised inverse depth, offset by the mean depth inside the
-  detected face, plus a small vertical gradient.
+* **R** — `(1/depth - min) / (max - min) * 255`.
 * **G** — zero.
-* **B** — a blurred breast mask scaled by the detected size class (0 if none).
+* **B** — zero.
+
+With `post_process_depth` enabled the legacy editor styling is applied instead:
+the R channel gets the face-relative offset, `/5` compression and the vertical
+gradient, and the B channel gets the blurred breast mask. That styling reduces
+depth precision, so it is kept as the last step and is off while the layer
+pipeline is being validated.
 
 ## Notes
 

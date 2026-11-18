@@ -34,3 +34,6 @@ venv/
 
 # --- macOS ---
 .DS_Store
+
+# scratch / experiments
+_tmp/

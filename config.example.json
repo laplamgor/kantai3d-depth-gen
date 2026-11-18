@@ -1,3 +1,18 @@
 {
-  "output_dir": "./output"
+  "output_dir": "./output",
+
+  "post_process_depth": false,
+
+  "layerize": {
+    "edge_thresh": 14.0,
+    "min_edge_px": 80,
+    "cliff_min": 0.12,
+    "max_area_frac": 0.25,
+    "inpaint_method": "lama",
+    "inpaint_margin": 3,
+    "bleed_margin": 0,
+    "render_depth_scale": 0.2,
+    "edge_median": 3,
+    "edge_order": 2
+  }
 }
